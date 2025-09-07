@@ -132,5 +132,17 @@ if(q){
     });
 }
 </script>
+<body>
+<h1>Maya Formula Search 🌸</h1>
+<input id="q" placeholder="Ask anything…" style="width:60%;padding:6px">
+<button onclick="go()">Search</button>
+<div id="out"></div>
+<script>
+function go(){
+  const query=document.getElementById('q').value.trim();
+  if(!query)return;
+  location.href='?q='+encodeURIComponent(query);
+}
+</script>
 </body>
 </html>
