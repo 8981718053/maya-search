@@ -2,146 +2,86 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Formula Search Engine</title>
+<title>Maya Formula Search 🌸</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
   body{font-family:system-ui;background:#111;color:#eee;margin:0;padding:2rem}
   h1{color:#0ff}#out{margin-top:1rem}small{color:#aaa}
   .bar{display:inline-block;background:#0ff;height:6px;margin-left:6px}
+  input{padding:8px;width:60%;font-size:1rem}
+  button{padding:8px 14px;margin-left:6px;font-size:1rem;cursor:pointer}
 </style>
 </head>
 <body>
-<h1>Formula Search Engine</h1>
-<p>Call <code>?q=your+query&format=json</code></p>
+<h1>Maya Formula Search 🌸</h1>
+<input id="q" placeholder="Ask anything…">
+<button onclick="go()">Search</button>
 <div id="out"></div>
 
+<!-- ----------  all formulas inside  ---------- -->
 <script>
-/* ---------- tiny math ---------- */
+/* ---- tiny math ---- */
 const sum=(a,f)=>a.reduce((s,x)=>s+f(x),0);
 const dot=(a,b)=>sum(a,(_,i)=>a[i]*b[i]);
 const mag=a=>Math.sqrt(dot(a,a));
 const cos=(a,b)=>dot(a,b)/(mag(a)*mag(b)+1e-12);
 const sig=x=>1/(1+Math.exp(-x));
 
-/* ---------- TF-IDF ---------- */
-const DF={}; let N=0; // global doc frequency
-function tfidfVec(bag,total){
-  const vec=[];
-  for(const w in DF){
-    const tf=(bag[w]||0)/total;
-    const idf=Math.log((N+1)/(DF[w]+1))+1;
-    vec.push(tf*idf);
-  }
-  return vec;
-}
-
-/* ---------- Bayesian belief ---------- */
-let prior=0.5;
-function bayes(likelihood){ prior=(prior*likelihood)/(prior*likelihood+(1-prior)*(1-likelihood)); return prior; }
-
-/* ---------- PageRank-lite (link graph inside results) ---------- */
-function pageRank(scores,links,α=0.85,iter=10){
-  const n=scores.length;
-  const pr=Array(n).fill(1/n);
-  for(let t=0;t<iter;t++){
-    const nxt=Array(n).fill(0);
-    for(let i=0;i<n;i++){
-      const contrib=pr[i]*α;
-      const outDeg=links[i]?links[i].length:1;
-      if(links[i]) links[i].forEach(j=>nxt[j]+=contrib/outDeg);
-      else nxt[i]+=contrib; // sink
-    }
-    const leak=(1-sum(nxt,x=>x))/n;
-    for(let i=0;i<n;i++) pr[i]=nxt[i]+leak;
-  }
-  return pr.map((v,i)=>v*scores[i]); // combine with raw score
-}
-
-/* ---------- recency boost (half-life) ---------- */
-function recencyBoost(dateStr,halfLife=7){
-  const days=(Date.now()-new Date(dateStr))/(1000*60*60*24);
-  return Math.pow(0.5,days/halfLife);
-}
-
-/* ---------- build global DF table (run once per batch) ---------- */
-function buildDF(docs){
-  docs.forEach(d=>{
-    N++;
-    const b=bag(d.snippet);
-    for(const w in b.bag) DF[w]=(DF[w]||0)+1;
-  });
-}
-
-/* ---------- bag helper ---------- */
+/* ---- bag + TF-IDF ---- */
 function bag(text){
   const w=(text||'').toLowerCase().match(/\w+/g)||[];
   const b={}; let t=0;
   for(const x of w){b[x]=(b[x]||0)+1;t++}
   return {bag:b,total:t};
 }
-
-/* ---------- API mode ---------- */
-const p=new URLSearchParams(location.search);
-const q=p.get('q');
-if(q){
-  /* ---- fetch CORS-free DuckDuckGo Instant ---- */
-  fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`)
-    .then(r=>r.json())
-    .then(ddg=>{
-      const docs=[];
-      if(ddg.Abstract) docs.push({title:ddg.Heading||q,snippet:ddg.Abstract,url:ddg.AbstractURL,date:new Date().toISOString(),links:[]});
-      if(ddg.RelatedTopics) ddg.RelatedTopics.forEach(rt=>{
-        if(rt.Text) docs.push({title:rt.Text.slice(0,60),snippet:rt.Text,url:rt.FirstURL||'#',date:new Date().toISOString(),links:[]});
-      });
-      buildDF(docs); // build DF table
-      const qBag=bag(q);
-      const qVec=tfidfVec(qBag.bag,qBag.total);
-
-      // scoring pipeline
-      docs.forEach((d,i)=>{
-        const dBag=bag(d.snippet);
-        const dVec=tfidfVec(dBag.bag,dBag.total);
-        const tfidfScore=cos(qVec,dVec);
-        const like=sig(tfidfScore*5-2); // 0→1 likelihood
-        const belief=bayes(like);
-        const ageBoost=recencyBoost(d.date);
-        const raw=tfidfScore*belief*ageBoost;
-        d.raw=raw;
-      });
-      // tiny link graph (fake: each doc links to next)
-      const links=docs.map((_,i)=>[i+1<docs.length?i+1:i]);
-      const ranked=docs.map((d,i)=>({...d,score:pageRank(docs.map(d=>d.raw),links)[i]}))
-                       .sort((a,b)=>b.score-a.score);
-
-      // output
-      const out=ranked.slice(0,8);
-      if(p.get('format')==='json'){
-        document.body.textContent=JSON.stringify({query:q,results:out},null,2);
-      }else{
-        out.innerHTML=out.map(d=>
-          `<h3><a href="${d.url}" target="_blank">${d.title}</a></h3>
-           <p>${d.snippet}</p>
-           <small>score: <span class="num">${d.score.toFixed(3)}</span>
-           belief: <span class="num">${(belief*100).toFixed(0)}%</span>
-           <span class="bar" style="width:${d.score*200}px"></span></small>`
-        ).join('<hr>');
-      }
-    })
-    .catch(e=>{
-      document.body.textContent=JSON.stringify({error:e.message});
-    });
+let prior=0.5;
+function bayes(likelihood){
+  prior=(prior*likelihood)/(prior*likelihood+(1-prior)*(1-likelihood)); return prior;
 }
-</script>
-<body>
-<h1>Maya Formula Search 🌸</h1>
-<input id="q" placeholder="Ask anything…" style="width:60%;padding:6px">
-<button onclick="go()">Search</button>
-<div id="out"></div>
-<script>
+
+/* ---- search trigger ---- */
 function go(){
   const query=document.getElementById('q').value.trim();
   if(!query)return;
   location.href='?q='+encodeURIComponent(query);
+}
+
+/* ----------  API mode (when ?q=  )  ---------- */
+const p=new URLSearchParams(location.search);
+const q=p.get('q');
+if(q){
+  fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`)
+    .then(r=>r.json())
+    .then(ddg=>{
+      const docs=[];
+      if(ddg.Abstract) docs.push({title:ddg.Heading||q,snippet:ddg.Abstract,url:ddg.AbstractURL,date:new Date().toISOString()});
+      if(ddg.RelatedTopics) ddg.RelatedTopics.forEach(rt=>{if(rt.Text) docs.push({title:rt.Text.slice(0,60),snippet:rt.Text,url:rt.FirstURL||'#',date:new Date().toISOString()})});
+      // scoring
+      const qBag=bag(q); const qVec=tfidfVec(qBag.bag,qBag.total);
+      docs.forEach(d=>{
+        const dBag=bag(d.snippet); const dVec=tfidfVec(dBag.bag,dBag.total);
+        const tfidf=cos(qVec,dVec); const belief=bayes(sig(tfidf*5-2));
+        d.score=tfidf*bayes(sig(tfidf*5-2));
+      });
+      docs.sort((a,b)=>b.score-a.score);
+      const out=docs.slice(0,8);
+      if(p.get('format')==='json') document.body.textContent=JSON.stringify({query:q,results:out},null,2);
+      else document.getElementById('out').innerHTML=out.map(d=>
+        `<h3><a href="${d.url}" target="_blank">${d.title}</a></h3>
+         <p>${d.snippet}</p>
+         <small>score: <span class="num">${d.score.toFixed(3)}</span>
+         belief: <span class="num">${(prior*100).toFixed(0)}%</span>
+         <span class="bar" style="width:${d.score*200}px"></span></small>`
+      ).join('<hr>');
+    })
+    .catch(e=>document.getElementById('out').textContent='Error: '+e.message);
+}
+
+/* ---- TF-IDF vector ---- */
+const DF={}; let N=0;
+function buildDF(docs){ docs.forEach(d=>{N++; const b=bag(d.snippet); for(const w in b.bag) DF[w]=(DF[w]||0)+1;}); }
+function tfidfVec(bag,total){
+  const vec=[]; for(const w in DF){ const tf=(bag[w]||0)/total; const idf=Math.log((N+1)/(DF[w]+1))+1; vec.push(tf*idf); } return vec;
 }
 </script>
 </body>
